@@ -103,6 +103,61 @@ class PaymentController {
       throw error;
     }
   }
+
+  // NEW METHODS for webhook handler integration
+
+  async getTransactionByProviderId(req, res) {
+    const { providerTransactionId } = req.params;
+    
+    // Get transaction by provider transaction ID
+    const transaction = await transactionService.getTransactionByProviderId(providerTransactionId);
+    
+    res.status(200).json(transaction);
+  }
+
+  async updateTransactionStatus(req, res) {
+    const { transactionId } = req.params;
+    const { status, ...metadata } = req.body;
+    
+    // Update transaction status
+    const transaction = await transactionService.updateTransactionStatus(transactionId, status, metadata);
+    
+    res.status(200).json(transaction);
+  }
+
+  async recordDispute(req, res) {
+    const { transactionId } = req.params;
+    const { status, disputeReason, disputeAmount, metadata } = req.body;
+    
+    try {
+      // Find the transaction
+      const transaction = await transactionService.getTransactionById(transactionId);
+      
+      // Update transaction with dispute information
+      await transaction.update({
+        status: 'disputed',
+        metadata: {
+          ...transaction.metadata,
+          dispute: {
+            reason: disputeReason,
+            amount: disputeAmount,
+            createdAt: new Date().toISOString(),
+            ...metadata
+          }
+        }
+      });
+      
+      res.status(200).json({
+        transactionId,
+        status: 'disputed',
+        disputeReason,
+        disputeAmount
+      });
+    } catch (error) {
+      logger.error(`Error recording dispute for transaction ${transactionId}:`, error);
+      throw error;
+    }
+  }
 }
 
 module.exports = new PaymentController();

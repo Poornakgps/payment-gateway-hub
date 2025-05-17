@@ -67,6 +67,41 @@ router.post(
   asyncHandler(paymentController.getProviderSession)
 );
 
+// Find transaction by provider transaction ID
+router.get(
+  '/provider/:providerTransactionId',
+  apiKeyAuth,
+  asyncHandler(paymentController.getTransactionByProviderId)
+);
+
+// Update transaction status
+router.post(
+  '/:transactionId/status',
+  apiKeyAuth,
+  asyncHandler(paymentController.updateTransactionStatus)
+);
+
+// Record dispute for transaction
+router.post(
+  '/:transactionId/dispute',
+  apiKeyAuth,
+  asyncHandler(paymentController.recordDispute)
+);
+
+// Provider-specific webhook validation endpoints
+router.post(
+  '/providers/stripe/validate-webhook',
+  apiKeyAuth,
+  express.raw({ type: 'application/json' }),
+  asyncHandler(providerController.validateStripeWebhook)
+);
+
+router.post(
+  '/providers/paypal/validate-webhook',
+  apiKeyAuth,
+  asyncHandler(providerController.validatePayPalWebhook)
+);
+
 // Utility function to handle async controller functions
 function asyncHandler(fn) {
   return (req, res, next) => {

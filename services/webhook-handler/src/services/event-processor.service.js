@@ -3,6 +3,7 @@ const config = require('../config');
 const { PAYMENT_PROVIDERS } = require('../../../shared/constants/payment-providers');
 const logger = require('../../../shared/lib/logger');
 const axios = require('axios');
+const Decimal = require('decimal.js'); // Add this to package.json
 
 class EventProcessorService {
   constructor() {
@@ -14,6 +15,9 @@ class EventProcessorService {
 
     this.paymentServiceUrl = config.paymentService.url;
     this.paymentServiceApiKey = config.paymentService.apiKey;
+    
+    // Start the retry processing
+    this.startRetryProcessing();
   }
 
   async processStripeEvent(event) {
@@ -275,10 +279,79 @@ class EventProcessorService {
       );
       
       const transaction = response.data;
-      return Math.abs(transaction.amount - refundAmount) < 0.01; // Allow for rounding errors
+      
+      // Using Decimal.js for precise decimal arithmetic
+      const transactionAmount = new Decimal(transaction.amount);
+      const refundAmountDecimal = new Decimal(refundAmount);
+      
+      // Check if difference is less than 0.01
+      return transactionAmount.minus(refundAmountDecimal).abs().lessThan(0.01);
     } catch (error) {
       logger.error(`Error determining if refund is full for transaction ${transactionId}:`, error);
       return false;
+    }
+  }
+
+  // Retry processing for failed events
+  async startRetryProcessing(intervalMs = 300000) { // Default: process every 5 minutes
+    if (this.retryInterval) {
+      clearInterval(this.retryInterval);
+    }
+    
+    this.retryInterval = setInterval(async () => {
+      await this.processFailedEvents();
+    }, intervalMs);
+    
+    logger.info(`Webhook retry processing started with interval of ${intervalMs}ms`);
+  }
+  
+  async stopRetryProcessing() {
+    if (this.retryInterval) {
+      clearInterval(this.retryInterval);
+      this.retryInterval = null;
+      logger.info('Webhook retry processing stopped');
+    }
+  }
+  
+  async processFailedEvents() {
+    try {
+      // Get all failed event keys
+      const keys = await this.redis.keys('webhook:failed:*');
+      
+      if (keys.length === 0) {
+        return;
+      }
+      
+      logger.info(`Processing ${keys.length} failed webhook events`);
+      
+      for (const key of keys) {
+        try {
+          // Extract provider and attempt to process
+          const keyParts = key.split(':');
+          const provider = keyParts[2];
+          
+          // Get event data
+          const eventData = await this.redis.get(key);
+          const event = JSON.parse(eventData);
+          
+          // Process based on provider
+          if (provider === PAYMENT_PROVIDERS.STRIPE) {
+            await this.processStripeEvent(event);
+          } else if (provider === PAYMENT_PROVIDERS.PAYPAL) {
+            await this.processPayPalEvent(event);
+          }
+          
+          // Delete key on successful processing
+          await this.redis.del(key);
+          
+          logger.info(`Successfully processed failed event: ${key}`);
+        } catch (error) {
+          logger.error(`Error processing failed event ${key}:`, error);
+          // We don't delete the key, so it will be retried next time
+        }
+      }
+    } catch (error) {
+      logger.error('Error in webhook retry processing:', error);
     }
   }
 }

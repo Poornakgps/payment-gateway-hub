@@ -18,5 +18,5 @@ EXPOSE 3002
 ENV NODE_ENV=production
 ENV PORT=3002
 
-# Start the service
-CMD ["npx", "nodemon", "src/index.js"]
+# Use node directly in production, not nodemon
+CMD ["node", "src/index.js"]
