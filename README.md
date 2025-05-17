@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Payment Gateway Integration Hub
 
 A unified payment processing system supporting multiple providers with testing sandbox.
@@ -14,6 +13,3 @@ A unified payment processing system supporting multiple providers with testing s
 
 See documentation in /docs for setup instructions.
 
-=======
-# payment-gateway-hub
->>>>>>> 997d34693de647525f321affd17cba52bfc0cf42
