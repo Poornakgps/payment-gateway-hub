@@ -8,6 +8,8 @@ import Home from './pages/Home';
 import Transactions from './pages/Transactions';
 import Reports from './pages/Reports';
 import TestingSandbox from './components/sandbox/TestingSandbox';
+import ComponentTest from './pages/ComponentTest';
+import ErrorBoundary from './components/common/ErrorBoundary';
 import './App.css';
 
 const App = () => {
@@ -37,25 +39,52 @@ const App = () => {
             {/* Protected routes */}
             <Route
               path="/dashboard"
-              element={isAuthenticated ? <Dashboard /> : <Navigate to="/login" />}
+              element={isAuthenticated ? (
+                <ErrorBoundary>
+                  <Dashboard />
+                </ErrorBoundary>
+              ) : <Navigate to="/login" />}
             />
             <Route
               path="/transactions"
-              element={isAuthenticated ? <Transactions /> : <Navigate to="/login" />}
+              element={isAuthenticated ? (
+                <ErrorBoundary>
+                  <Transactions />
+                </ErrorBoundary>
+              ) : <Navigate to="/login" />}
             />
             <Route
               path="/transactions/:id"
-              element={isAuthenticated ? <TransactionDetails /> : <Navigate to="/login" />}
+              element={isAuthenticated ? (
+                <ErrorBoundary>
+                  <TransactionDetails />
+                </ErrorBoundary>
+              ) : <Navigate to="/login" />}
             />
             <Route
               path="/reports"
-              element={isAuthenticated ? <Reports /> : <Navigate to="/login" />}
+              element={isAuthenticated ? (
+                <ErrorBoundary>
+                  <Reports />
+                </ErrorBoundary>
+              ) : <Navigate to="/login" />}
             />
             
             {/* Public routes */}
-            <Route path="/sandbox" element={<TestingSandbox />} />
-            <Route path="/checkout" element={<CheckoutPage />} />
+            <Route path="/sandbox" element={
+              <ErrorBoundary>
+                <TestingSandbox />
+              </ErrorBoundary>
+            } />
+            <Route path="/checkout" element={
+              <ErrorBoundary>
+                <CheckoutPage />
+              </ErrorBoundary>
+            } />
             <Route path="/login" element={<LoginPage onLogin={login} />} />
+            
+            {/* Test route */}
+            <Route path="/test" element={<ComponentTest />} />
             
             {/* Fallback route */}
             <Route path="*" element={<NotFound />} />

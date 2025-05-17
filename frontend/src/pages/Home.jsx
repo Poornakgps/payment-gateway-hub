@@ -82,9 +82,6 @@ const Home = () => {
           <div className="bg-white p-6 rounded-lg shadow-md">
             <img src="/paypal-logo.svg" alt="PayPal" className="h-12" />
           </div>
-          <div className="bg-white p-6 rounded-lg shadow-md">
-            <img src="/braintree-logo.svg" alt="Braintree" className="h-12" />
-          </div>
         </div>
       </div>
 

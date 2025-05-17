@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import PaymentForm from '../components/forms/PaymentForm';
+import PaymentForm from '../forms/PaymentForm'
 
 const TestingSandbox = () => {
   const [testMode, setTestMode] = useState('success');
