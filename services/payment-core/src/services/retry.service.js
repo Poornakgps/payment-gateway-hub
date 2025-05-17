@@ -1,4 +1,5 @@
 const { Op } = require('sequelize');
+const Transaction = require('../models/transaction.model'); // Moved to module level
 const config = require('../config');
 const logger = require('../../../shared/lib/logger');
 
@@ -40,7 +41,6 @@ class RetryService {
 
   async processRetries() {
     try {
-      const Transaction = require('../models/transaction.model');
       const transactionService = require('./transaction.service');
       
       // Find transactions due for retry

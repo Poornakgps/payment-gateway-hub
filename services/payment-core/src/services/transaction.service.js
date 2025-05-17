@@ -6,6 +6,7 @@ const { PaymentProcessingError } = require('../../../shared/lib/errors');
 const logger = require('../../../shared/lib/logger');
 const retryService = require('./retry.service');
 const { Op } = require('sequelize');
+
 class TransactionService {
   getProviderAdapter(provider) {
     switch (provider) {
@@ -19,9 +20,11 @@ class TransactionService {
   }
 
   async createTransaction(transactionData) {
+    let transaction = null;
+    
     try {
       // Create transaction record in pending state
-      const transaction = await Transaction.create({
+      transaction = await Transaction.create({
         ...transactionData,
         status: 'initiated',
       });
@@ -54,16 +57,15 @@ class TransactionService {
     } catch (error) {
       logger.error('Error creating transaction:', error);
       
-      // If we have a transaction ID, update the transaction with error info
-      if (error.transactionId) {
-        await Transaction.update(
-          {
-            status: 'failed',
-            errorMessage: error.message,
-            errorCode: error.errorCode || 'UNKNOWN_ERROR',
-          },
-          { where: { id: error.transactionId } }
-        );
+      // If we've created a transaction, update it with error info
+      if (transaction) {
+        await transaction.update({
+          status: 'failed',
+          errorMessage: error.message,
+          errorCode: error.errorCode || 'UNKNOWN_ERROR',
+        });
+        
+        error.transactionId = transaction.id;
       }
       
       throw error;
@@ -111,18 +113,20 @@ class TransactionService {
       
       // If we have a transaction ID, update it with error info
       if (transactionId) {
-        await Transaction.update(
-          {
+        const transaction = await Transaction.findByPk(transactionId);
+        
+        if (transaction) {
+          // Don't change status to failed if we're going to retry
+          // Only update error information
+          await transaction.update({
             errorMessage: error.message,
             errorCode: error.errorCode || 'UNKNOWN_ERROR',
-          },
-          { where: { id: transactionId } }
-        );
-        
-        // Add to retry queue if appropriate
-        const transaction = await Transaction.findByPk(transactionId);
-        if (transaction && transaction.status !== 'failed') {
-          await retryService.scheduleRetry(transaction);
+          });
+          
+          // Check if the transaction should be retried
+          if (transaction.status !== 'failed') {
+            await retryService.scheduleRetry(transaction);
+          }
         }
       }
       
@@ -175,11 +179,15 @@ class TransactionService {
         amount || null
       );
       
-      // Calculate refunded amount
-      const totalRefundedAmount = (transaction.refundedAmount || 0) + refundResult.amount;
+      // Calculate refunded amount (including previous refunds)
+      const currentRefundedAmount = parseFloat(transaction.refundedAmount || 0);
+      const newRefundAmount = parseFloat(refundResult.amount);
+      const totalRefundedAmount = currentRefundedAmount + newRefundAmount;
+      const transactionAmount = parseFloat(transaction.amount);
       
-      // Determine new status (partially_refunded or refunded)
-      const newStatus = totalRefundedAmount < transaction.amount ? 'partially_refunded' : 'refunded';
+      // Determine new status - consider a small tolerance for floating point comparison
+      const isFullRefund = Math.abs(totalRefundedAmount - transactionAmount) < 0.01;
+      const newStatus = isFullRefund ? 'refunded' : 'partially_refunded';
       
       // Update transaction
       await transaction.update({

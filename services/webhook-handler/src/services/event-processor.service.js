@@ -3,7 +3,7 @@ const config = require('../config');
 const { PAYMENT_PROVIDERS } = require('../../../shared/constants/payment-providers');
 const logger = require('../../../shared/lib/logger');
 const axios = require('axios');
-const Decimal = require('decimal.js'); // Add this to package.json
+const Decimal = require('decimal.js');
 
 class EventProcessorService {
   constructor() {
@@ -20,76 +20,110 @@ class EventProcessorService {
     this.startRetryProcessing();
   }
 
+  // Check if event has already been processed
+  async hasProcessedEvent(provider, eventId) {
+    const key = `webhook:${provider}:${eventId}`;
+    return await this.redis.exists(key) === 1;
+  }
+  
+  // Mark event as being processed - with a lock expiration
+  async markEventProcessing(provider, eventId) {
+    const key = `webhook:${provider}:${eventId}`;
+    const processingKey = `webhook:processing:${provider}:${eventId}`;
+    
+    // Set a lock with expiration (5 minutes)
+    await this.redis.set(processingKey, 'processing', 'EX', 300);
+  }
+  
+  // Release processing lock if we need to
+  async releaseProcessingLock(provider, eventId) {
+    const processingKey = `webhook:processing:${provider}:${eventId}`;
+    await this.redis.del(processingKey);
+  }
+
   async processStripeEvent(event) {
-    // Idempotency check
-    const processed = await this._checkEventProcessed(PAYMENT_PROVIDERS.STRIPE, event.id);
-    if (processed) {
-      logger.info(`Stripe event ${event.id} already processed, skipping`);
-      return;
-    }
-
-    logger.info(`Processing Stripe event: ${event.type}`);
-
+    const eventId = event.id;
+    const provider = PAYMENT_PROVIDERS.STRIPE;
+    
     try {
+      // Double-check if this event has already been processed
+      // This handles the case where processing might have started in a different request
+      const processed = await this.hasProcessedEvent(provider, eventId);
+      if (processed) {
+        logger.info(`Stripe event ${eventId} already processed, skipping`);
+        return;
+      }
+
+      logger.info(`Processing Stripe event: ${event.type}`);
+
       switch (event.type) {
         case 'payment_intent.succeeded':
-          await this._handlePaymentSuccess(PAYMENT_PROVIDERS.STRIPE, event.data.object);
+          await this._handlePaymentSuccess(provider, event.data.object);
           break;
         case 'payment_intent.payment_failed':
-          await this._handlePaymentFailure(PAYMENT_PROVIDERS.STRIPE, event.data.object);
+          await this._handlePaymentFailure(provider, event.data.object);
           break;
         case 'charge.refunded':
-          await this._handleRefund(PAYMENT_PROVIDERS.STRIPE, event.data.object);
+          await this._handleRefund(provider, event.data.object);
           break;
         case 'charge.dispute.created':
-          await this._handleDispute(PAYMENT_PROVIDERS.STRIPE, event.data.object);
+          await this._handleDispute(provider, event.data.object);
           break;
         default:
           logger.info(`Unhandled Stripe event type: ${event.type}`);
       }
 
       // Mark event as processed
-      await this._markEventProcessed(PAYMENT_PROVIDERS.STRIPE, event.id);
+      await this._markEventProcessed(provider, eventId);
     } catch (error) {
-      logger.error(`Error processing Stripe event ${event.id}:`, error);
+      logger.error(`Error processing Stripe event ${eventId}:`, error);
       // Store failed event for retry
-      await this._storeFailedEvent(PAYMENT_PROVIDERS.STRIPE, event);
+      await this._storeFailedEvent(provider, event);
       throw error;
+    } finally {
+      // Always clean up the processing lock
+      await this.releaseProcessingLock(provider, eventId);
     }
   }
 
   async processPayPalEvent(event) {
-    // Idempotency check
-    const processed = await this._checkEventProcessed(PAYMENT_PROVIDERS.PAYPAL, event.id);
-    if (processed) {
-      logger.info(`PayPal event ${event.id} already processed, skipping`);
-      return;
-    }
-
-    logger.info(`Processing PayPal event: ${event.event_type}`);
-
+    const eventId = event.id || event.event_id;
+    const provider = PAYMENT_PROVIDERS.PAYPAL;
+    
     try {
+      // Double-check if already processed
+      const processed = await this.hasProcessedEvent(provider, eventId);
+      if (processed) {
+        logger.info(`PayPal event ${eventId} already processed, skipping`);
+        return;
+      }
+
+      logger.info(`Processing PayPal event: ${event.event_type}`);
+
       switch (event.event_type) {
         case 'PAYMENT.CAPTURE.COMPLETED':
-          await this._handlePaymentSuccess(PAYMENT_PROVIDERS.PAYPAL, event.resource);
+          await this._handlePaymentSuccess(provider, event.resource);
           break;
         case 'PAYMENT.CAPTURE.DENIED':
-          await this._handlePaymentFailure(PAYMENT_PROVIDERS.PAYPAL, event.resource);
+          await this._handlePaymentFailure(provider, event.resource);
           break;
         case 'PAYMENT.CAPTURE.REFUNDED':
-          await this._handleRefund(PAYMENT_PROVIDERS.PAYPAL, event.resource);
+          await this._handleRefund(provider, event.resource);
           break;
         default:
           logger.info(`Unhandled PayPal event type: ${event.event_type}`);
       }
 
       // Mark event as processed
-      await this._markEventProcessed(PAYMENT_PROVIDERS.PAYPAL, event.id);
+      await this._markEventProcessed(provider, eventId);
     } catch (error) {
-      logger.error(`Error processing PayPal event ${event.id}:`, error);
+      logger.error(`Error processing PayPal event ${eventId}:`, error);
       // Store failed event for retry
-      await this._storeFailedEvent(PAYMENT_PROVIDERS.PAYPAL, event);
+      await this._storeFailedEvent(provider, event);
       throw error;
+    } finally {
+      // Always clean up the processing lock
+      await this.releaseProcessingLock(provider, eventId);
     }
   }
 
@@ -136,9 +170,20 @@ class EventProcessorService {
 
   async _handleRefund(provider, data) {
     try {
-      const paymentId = provider === PAYMENT_PROVIDERS.STRIPE 
-        ? data.payment_intent 
-        : data.id;
+      let paymentId;
+      
+      if (provider === PAYMENT_PROVIDERS.STRIPE) {
+        paymentId = data.payment_intent;
+      } else if (provider === PAYMENT_PROVIDERS.PAYPAL) {
+        paymentId = data.id;
+      } else {
+        throw new Error(`Unsupported provider for refund: ${provider}`);
+      }
+      
+      if (!paymentId) {
+        logger.warn(`Missing payment ID in refund data for provider: ${provider}`);
+        return;
+      }
       
       const transactionId = await this._getTransactionId(provider, paymentId);
       
@@ -168,19 +213,32 @@ class EventProcessorService {
 
   async _handleDispute(provider, data) {
     try {
-      const transactionId = await this._getTransactionId(provider, data.payment_intent);
+      let paymentId;
+      
+      if (provider === PAYMENT_PROVIDERS.STRIPE) {
+        paymentId = data.payment_intent;
+      } else if (provider === PAYMENT_PROVIDERS.PAYPAL) {
+        paymentId = data.id;
+      } else {
+        throw new Error(`Unsupported provider for dispute: ${provider}`);
+      }
+      
+      if (!paymentId) {
+        logger.warn(`Missing payment ID in dispute data for provider: ${provider}`);
+        return;
+      }
+      
+      const transactionId = await this._getTransactionId(provider, paymentId);
       
       if (!transactionId) {
-        logger.warn(`No transaction found for provider ID: ${data.payment_intent}`);
+        logger.warn(`No transaction found for provider ID: ${paymentId}`);
         return;
       }
 
       await axios.post(`${this.paymentServiceUrl}/payments/${transactionId}/dispute`, {
         status: 'disputed',
-        disputeReason: data.reason,
-        disputeAmount: provider === PAYMENT_PROVIDERS.STRIPE 
-          ? data.amount / 100 
-          : parseFloat(data.amount.value),
+        disputeReason: this._extractDisputeReason(provider, data),
+        disputeAmount: this._extractDisputeAmount(provider, data),
         metadata: {
           providerEventData: data
         }
@@ -241,6 +299,10 @@ class EventProcessorService {
     const key = `webhook:${provider}:${eventId}`;
     await this.redis.set(key, 'processed');
     await this.redis.expire(key, 60 * 60 * 24 * 30); // 30 days TTL
+    
+    // Clean up the processing key as well
+    const processingKey = `webhook:processing:${provider}:${eventId}`;
+    await this.redis.del(processingKey);
   }
 
   async _storeFailedEvent(provider, event) {
@@ -264,7 +326,25 @@ class EventProcessorService {
     } else if (provider === PAYMENT_PROVIDERS.PAYPAL) {
       return parseFloat(data.amount.value);
     }
-    return 0;
+    throw new Error(`Unable to extract refund amount for provider: ${provider}`);
+  }
+  
+  _extractDisputeReason(provider, data) {
+    if (provider === PAYMENT_PROVIDERS.STRIPE) {
+      return data.reason || 'unknown';
+    } else if (provider === PAYMENT_PROVIDERS.PAYPAL) {
+      return data.dispute_reason || 'unknown';
+    }
+    return 'unknown';
+  }
+  
+  _extractDisputeAmount(provider, data) {
+    if (provider === PAYMENT_PROVIDERS.STRIPE) {
+      return data.amount / 100; // Convert from cents
+    } else if (provider === PAYMENT_PROVIDERS.PAYPAL) {
+      return parseFloat(data.dispute_amount?.value || data.amount.value);
+    }
+    throw new Error(`Unable to extract dispute amount for provider: ${provider}`);
   }
 
   async _isFullRefund(transactionId, refundAmount) {
