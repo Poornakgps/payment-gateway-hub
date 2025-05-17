@@ -5,7 +5,7 @@ const { PAYMENT_PROVIDERS } = require('../../../shared/constants/payment-provide
 const { PaymentProcessingError } = require('../../../shared/lib/errors');
 const logger = require('../../../shared/lib/logger');
 const retryService = require('./retry.service');
-
+const { Op } = require('sequelize');
 class TransactionService {
   getProviderAdapter(provider) {
     switch (provider) {

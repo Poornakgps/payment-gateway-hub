@@ -39,12 +39,6 @@ module.exports = {
       clientSecret: process.env.PAYPAL_CLIENT_SECRET,
       environment: process.env.PAYPAL_ENVIRONMENT || 'sandbox',
     },
-    braintree: {
-      merchantId: process.env.BRAINTREE_MERCHANT_ID,
-      publicKey: process.env.BRAINTREE_PUBLIC_KEY,
-      privateKey: process.env.BRAINTREE_PRIVATE_KEY,
-      environment: process.env.BRAINTREE_ENVIRONMENT || 'Sandbox',
-    },
   },
   
   // Retry configuration
